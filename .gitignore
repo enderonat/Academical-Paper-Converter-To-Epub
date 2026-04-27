@@ -1,0 +1,16 @@
+# Python environment and cache
+.venv/
+__pycache__/
+*.pyc
+
+# Local Data and Outputs
+# (We ignore these so we don't push massive PDFs, images, or EPUBs to GitHub)
+books/
+data/
+output/
+
+# AI and Editor configuration folders
+.claude/
+
+# Note: We are NOT ignoring CLAUDE.md or current_state.md. 
+# It's good to track these so your project context is backed up!
