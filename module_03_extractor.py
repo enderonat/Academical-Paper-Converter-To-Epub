@@ -37,18 +37,24 @@ IMAGE_CROP_PADDING = 4
 # ── Junk-filter knobs ─────────────────────────────────────────────────────────
 # Text appearing on this many pages or more is considered a running header/footer
 JUNK_REPEAT_THRESHOLD = 3
-# Top/bottom margin fractions in which short text is considered chrome
-JUNK_TOP_FRAC = 0.08
+# Top/bottom/left/right margin fractions in which short text is considered chrome
+JUNK_TOP_FRAC    = 0.08
 JUNK_BOTTOM_FRAC = 0.05
+JUNK_LEFT_FRAC   = 0.05
+JUNK_RIGHT_FRAC  = 0.05
 # Length under which margin text is considered chrome (page numbers, headers)
 JUNK_SHORT_MAX_CHARS = 60
+# Images smaller than this area (px²) in the outer margin are publisher decorations
+JUNK_IMG_MAX_AREA = 200 * 200
 # Substring patterns that always mark a region as junk regardless of position
 JUNK_PATTERNS = re.compile(
     r"(downloaded\s+from|by\s+guest\s+on|ip\s+address|"
     r"all\s+rights\s+reserved|©\s*\d{4}|"
     r"https?://\S*lyellcollection|"
     r"www\.geolsoc\.org\.uk|"
-    r"publishing\s+disclaimer)",
+    r"publishing\s+disclaimer|"
+    r"check\s+for\s+updates|"
+    r"crossmark)",
     re.IGNORECASE,
 )
 
@@ -147,7 +153,8 @@ def extract_content(book_name: str) -> dict:
     print(f"  Junk removed   : {sum(clean_stats.values())} regions")
     print(f"    repeating    : {clean_stats['repeating']}  (running headers/footers)")
     print(f"    pattern      : {clean_stats['pattern']}  (watermarks)")
-    print(f"    margin       : {clean_stats['position']}  (short top/bottom text)")
+    print(f"    margin text  : {clean_stats['position']}  (short margin text)")
+    print(f"    margin img   : {clean_stats.get('margin_img', 0)}  (small margin images)")
 
     # Re-write per-page JSONs so the cleaned data is what resume picks up
     for record in page_extraction_records:
@@ -305,6 +312,20 @@ def _extract_image(
     """
     x0, y0, x1, y1 = region["bbox_px"]
 
+    # For Formula regions: extend crop to the full column (or page) width so
+    # equations that run to the column edge aren't cut off.
+    if region.get("label") == "Formula":
+        formula_w = x1 - x0
+        if formula_w >= width_px * 0.45:
+            # Wide formula (single-column paper or full-width equation) → full page
+            x0, x1 = 0, width_px
+        else:
+            # Narrow formula in a two-column layout → extend to containing column
+            mid_x = width_px // 2
+            cx = (x0 + x1) / 2
+            x0 = 0      if cx < mid_x else mid_x
+            x1 = mid_x  if cx < mid_x else width_px
+
     # Add padding, clamped to page bounds
     x0 = max(0,         x0 - IMAGE_CROP_PADDING)
     y0 = max(0,         y0 - IMAGE_CROP_PADDING)
@@ -389,12 +410,27 @@ def _filter_junk(page_records: list[dict]) -> dict:
 
     for page in page_records:
         height_px = page.get("height_px")
+        width_px  = page.get("width_px")
         kept: list[dict] = []
         for region in page["regions"]:
             content = region.get("content", {})
 
-            # Always keep image regions
-            if content.get("type") != "text":
+            # Image regions: drop small images sitting in the outer margins
+            # (publisher logos, CrossMark emblems, "Check for Updates" badges).
+            if content.get("type") == "image":
+                bbox_px = region.get("bbox_px")
+                if bbox_px and height_px and width_px:
+                    ix0, iy0, ix1, iy1 = bbox_px
+                    iw, ih = ix1 - ix0, iy1 - iy0
+                    in_margin = (
+                        ix1 < width_px  * JUNK_LEFT_FRAC  or
+                        ix0 > width_px  * (1 - JUNK_RIGHT_FRAC) or
+                        iy1 < height_px * JUNK_TOP_FRAC or
+                        iy0 > height_px * (1 - JUNK_BOTTOM_FRAC)
+                    )
+                    if in_margin and iw * ih < JUNK_IMG_MAX_AREA:
+                        stats["margin_img"] = stats.get("margin_img", 0) + 1
+                        continue
                 kept.append(region)
                 continue
 
@@ -415,14 +451,16 @@ def _filter_junk(page_records: list[dict]) -> dict:
                 stats["repeating"] += 1
                 continue
 
-            # 2c. Short text in margins (only if we know page height)
+            # 2c. Short text in margins (top/bottom/left/right)
             if len(text) < JUNK_SHORT_MAX_CHARS and height_px:
                 bbox_px = region.get("bbox_px")
                 if bbox_px and len(bbox_px) == 4:
-                    y_top, y_bot = bbox_px[1], bbox_px[3]
-                    in_top = y_bot < height_px * JUNK_TOP_FRAC
-                    in_bot = y_top > height_px * (1 - JUNK_BOTTOM_FRAC)
-                    if in_top or in_bot:
+                    x_left, y_top, x_right, y_bot = bbox_px
+                    in_top   = y_bot   < height_px * JUNK_TOP_FRAC
+                    in_bot   = y_top   > height_px * (1 - JUNK_BOTTOM_FRAC)
+                    in_left  = width_px and x_right < width_px * JUNK_LEFT_FRAC
+                    in_right = width_px and x_left  > width_px * (1 - JUNK_RIGHT_FRAC)
+                    if in_top or in_bot or in_left or in_right:
                         stats["position"] += 1
                         continue
 

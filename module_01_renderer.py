@@ -94,6 +94,7 @@ def render_pdf(pdf_path: Path) -> dict:
             "height_px":   height_px,
             "width_pt":    round(page.rect.width,  2),
             "height_pt":   round(page.rect.height, 2),
+            "rotation":    page.rotation,  # 0, 90, 180, or 270
         })
 
         _progress(page_number, total)

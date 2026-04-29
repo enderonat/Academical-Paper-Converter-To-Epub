@@ -102,6 +102,11 @@ def detect_layout(book_name: str, batch_size: int = DEFAULT_BATCH_SIZE) -> dict:
                     continue
 
             regions = _parse_regions(result, page_meta, scale)
+            # Sideways pages: skip surya's (likely garbage) regions and treat
+            # the whole page as one image.  90/270 are the common cases; 180
+            # is upside-down but still readable so we leave it to surya.
+            if page_meta.get("rotation", 0) in (90, 270):
+                regions = _full_page_image_region(page_meta)
             batch_records.append((page_meta, regions, img))
 
         # Reading-order pass — surya's layout returns label-grouped boxes,
@@ -317,7 +322,23 @@ def _column_aware_sort(regions: list[dict], page_width_px: int) -> None:
  
  
 # ── Region parsing ─────────────────────────────────────────────────────────────
- 
+
+def _full_page_image_region(page_meta: dict) -> list[dict]:
+    """Return a single Figure region covering the entire page (for rotated pages)."""
+    w_px = page_meta["width_px"]
+    h_px = page_meta["height_px"]
+    n    = page_meta["page_number"]
+    scale = 72.0 / RENDER_DPI
+    return [{
+        "region_id":     f"p{n}_r0",
+        "label":         "Figure",
+        "policy":        "image",
+        "reading_order": 0,
+        "bbox_px":       [0, 0, w_px, h_px],
+        "bbox_pt":       [0.0, 0.0, round(w_px * scale, 3), round(h_px * scale, 3)],
+    }]
+
+
 def _parse_regions(result, page_meta: dict, scale: float) -> list[dict]:
     """
     Convert surya LayoutResult → our clean region list.

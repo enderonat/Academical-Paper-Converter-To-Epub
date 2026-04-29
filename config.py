@@ -112,4 +112,12 @@ div.visual        { display: block; margin: 1.2em 0; text-align: center;
                     clear: both; float: none; page-break-inside: avoid; }
 div.visual img    { display: block; max-width: 100%; height: auto;
                     margin: 0 auto; float: none; }
+
+/* Interactive footnote / reference links ----------------------------------- */
+a.fn-ref          { font-size: 0.75em; vertical-align: super;
+                    text-decoration: none; color: #2a6ebb; }
+a.fn-back         { text-decoration: none; color: #888; margin-right: 0.3em; }
+aside.fn-entry    { font-size: 0.85em; border-left: 3px solid #ddd;
+                    padding: 0.2em 0 0.2em 0.7em; margin: 0.3em 0; }
+aside.fn-entry p  { margin: 0; }
 """

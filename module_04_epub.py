@@ -18,12 +18,13 @@ Usage (as module):
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 from ebooklib import epub
 
-from config import DATA_DIR, EPUB_CSS, LABEL_TO_HTML, OUTPUT_DIR
+from config import EPUB_CSS, LABEL_TO_HTML, OUTPUT_DIR
 from module_03_extractor import load_extraction_manifest
 
 
@@ -52,8 +53,7 @@ def build_epub(book_name: str) -> Path:
 
     # Prefer a detected "Title" region for the EPUB title; fall back to filename
     detected_title = _find_document_title(manifest)
-    fallback_title = book_name.replace("_", " ").replace("-", " ").title()
-    book.set_title(detected_title or fallback_title)
+    book.set_title(detected_title or book_name)
     book.set_language("en")
 
     # Add shared CSS
@@ -67,9 +67,19 @@ def build_epub(book_name: str) -> Path:
 
     # Collect all regions across pages, in order, then split into chapters
     all_regions = _collect_regions(manifest)
+
+    # Detect footnote/reference definitions before building chapters so we
+    # can skip those regions during normal rendering and link refs correctly.
+    fn_defs, fn_region_ids = _detect_footnotes(all_regions)
+    fn_numbers = set(fn_defs.keys())
+    # Populated during chapter rendering: {fn_num → first chap filename}
+    fn_first_ref: dict[int, str] = {}
+
     chapters_data = _split_into_chapters(all_regions, book_name)
 
     print(f"  Chapters  : {len(chapters_data)}")
+    if fn_defs:
+        print(f"  Refs found: {len(fn_defs)}")
 
     # Add image files to epub, build a lookup: filename → epub item
     image_items = _add_images(book, all_regions)
@@ -78,23 +88,44 @@ def build_epub(book_name: str) -> Path:
     epub_chapters: list[epub.EpubHtml] = []
 
     for chap_index, chap in enumerate(chapters_data):
-        html_body = _render_chapter_html(chap["regions"], image_items)
+        chap_filename = f"chap_{chap_index:04d}.xhtml"
+        html_body = _render_chapter_html(
+            chap["regions"], image_items,
+            fn_region_ids=fn_region_ids,
+            fn_numbers=fn_numbers,
+            fn_first_ref=fn_first_ref,
+            chap_filename=chap_filename,
+        )
 
         if not html_body.strip():
             continue
 
         chap_item = epub.EpubHtml(
             title    = chap["title"],
-            file_name= f"chap_{chap_index:04d}.xhtml",
+            file_name= chap_filename,
             lang     = "en",
         )
         chap_item.content = (
-            f'<html><head><title>{_esc(chap["title"])}</title></head>'
+            f'<html xmlns:epub="http://www.idpf.org/2007/ops">'
+            f'<head><title>{_esc(chap["title"])}</title></head>'
             f'<body>{html_body}</body></html>'
         )
         chap_item.add_item(css_item)
         book.add_item(chap_item)
         epub_chapters.append(chap_item)
+
+    # Append footnotes/references chapter after all body chapters
+    if fn_defs:
+        fn_html  = _render_footnotes_html(fn_defs, fn_first_ref)
+        fn_item  = epub.EpubHtml(title="References", file_name="footnotes.xhtml", lang="en")
+        fn_item.content = (
+            f'<html xmlns:epub="http://www.idpf.org/2007/ops">'
+            f'<head><title>References</title></head>'
+            f'<body>{fn_html}</body></html>'
+        )
+        fn_item.add_item(css_item)
+        book.add_item(fn_item)
+        epub_chapters.append(fn_item)
 
     if not epub_chapters:
         print("  WARNING: No content was generated. Check extraction results.")
@@ -117,11 +148,76 @@ def build_epub(book_name: str) -> Path:
 # ── Chapter splitting ──────────────────────────────────────────────────────────
 
 def _collect_regions(manifest: dict) -> list[dict]:
-    """Flatten all pages → single ordered list of regions."""
+    """Flatten all pages → single ordered list of regions, with per-page image dedup."""
     regions = []
     for page in manifest["pages"]:
-        regions.extend(page["regions"])
+        pw = page.get("width_px", 0)
+        page_regions = _dedup_overlapping_images(page["regions"], pw)
+        regions.extend(page_regions)
     return regions
+
+
+def _dedup_overlapping_images(regions: list[dict], page_width_px: int) -> list[dict]:
+    """
+    Remove image regions whose effective crop bbox is substantially contained
+    within a larger image region's effective crop bbox.
+
+    Fixes the case where surya splits one equation into several overlapping
+    Formula bboxes — our column-extension logic then produces near-identical
+    crops for all of them.  We keep the one with the largest effective area.
+    """
+    img_idx = [i for i, r in enumerate(regions) if r.get("policy") == "image"]
+    if len(img_idx) <= 1:
+        return regions
+
+    # Pre-compute effective crop bboxes (mirrors _extract_image extension logic)
+    effective: dict[int, tuple] = {
+        i: _effective_crop_bbox(regions[i], page_width_px) for i in img_idx
+    }
+
+    to_drop: set[int] = set()
+    for i in img_idx:
+        if i in to_drop:
+            continue
+        ex0, ey0, ex1, ey1 = effective[i]
+        e_area = max(1, (ex1 - ex0) * (ey1 - ey0))
+
+        for j in img_idx:
+            if i == j or j in to_drop:
+                continue
+            jx0, jy0, jx1, jy1 = effective[j]
+            j_area = (jx1 - jx0) * (jy1 - jy0)
+
+            ix0 = max(ex0, jx0);  iy0 = max(ey0, jy0)
+            ix1 = min(ex1, jx1);  iy1 = min(ey1, jy1)
+            if ix1 <= ix0 or iy1 <= iy0:
+                continue
+
+            inter = (ix1 - ix0) * (iy1 - iy0)
+            # Drop i if 65%+ of it is inside j AND j is at least as large
+            if inter / e_area > 0.65 and j_area >= e_area:
+                to_drop.add(i)
+                break
+
+    return [r for i, r in enumerate(regions) if i not in to_drop]
+
+
+def _effective_crop_bbox(region: dict, page_width_px: int) -> tuple:
+    """
+    Return the actual crop bbox that _extract_image would use for this region,
+    including the formula-extension logic (mirrors module_03_extractor).
+    """
+    x0, y0, x1, y1 = region["bbox_px"]
+    if region.get("label") == "Formula" and page_width_px:
+        formula_w = x1 - x0
+        if formula_w >= page_width_px * 0.45:
+            x0, x1 = 0, page_width_px
+        else:
+            mid_x = page_width_px // 2
+            cx = (x0 + x1) / 2
+            x0 = 0      if cx < mid_x else mid_x
+            x1 = mid_x  if cx < mid_x else page_width_px
+    return (x0, y0, x1, y1)
 
 
 def _split_into_chapters(regions: list[dict], book_name: str) -> list[dict]:
@@ -216,13 +312,24 @@ def _add_images(book: epub.EpubBook, regions: list[dict]) -> dict[str, epub.Epub
 def _render_chapter_html(
     regions: list[dict],
     image_items: dict[str, epub.EpubItem],
+    fn_region_ids: set[str] | None = None,
+    fn_numbers: set[int] | None = None,
+    fn_first_ref: dict[int, str] | None = None,
+    chap_filename: str = "",
 ) -> str:
     """
     Convert a list of regions into an HTML string for one epub chapter.
 
     Consecutive List-item regions are automatically grouped into a <ul>.
     Empty text regions are silently skipped.
+    Footnote definition regions (fn_region_ids) are skipped — they go into
+    the dedicated footnotes chapter instead.
+    [N] citation markers in body text are replaced with epub:type="noteref"
+    links when fn_numbers / fn_first_ref are supplied.
     """
+    fn_region_ids = fn_region_ids or set()
+    fn_numbers    = fn_numbers    or set()
+
     parts: list[str] = []
     pending_list_items: list[str] = []
 
@@ -234,6 +341,10 @@ def _render_chapter_html(
             pending_list_items.clear()
 
     for region in regions:
+        # Skip regions that are footnote definitions — they go into footnotes.xhtml
+        if region.get("region_id") in fn_region_ids:
+            continue
+
         label   = region["label"]
         content = region.get("content", {})
 
@@ -256,7 +367,9 @@ def _render_chapter_html(
         if content.get("is_empty") or not content.get("text"):
             continue
 
-        text = _esc(content["text"])
+        raw = content["text"]
+        # Inject interactive footnote links where [N] appears
+        text = _inject_fn_refs(raw, fn_numbers, fn_first_ref, chap_filename)
 
         # List items: buffer them, flush when the run ends
         if label in ("List-item", "ListItem"):
@@ -302,15 +415,149 @@ def _truncate(text: str, max_len: int) -> str:
 
 
 def _find_document_title(manifest: dict) -> str | None:
-    """Return the first non-empty 'Title' region's text, if any (else None)."""
-    for page in manifest["pages"]:
+    """
+    Return the first non-empty 'Title' region's text from page 1 only.
+
+    Limiting to page 1 avoids matching chapter headings deeper in the document.
+    A minimum length of 15 chars rejects single-word false positives.
+    """
+    pages = manifest["pages"]
+    for page in pages[:1]:  # page 1 only
         for region in page["regions"]:
             if region.get("label") != "Title":
                 continue
             content = region.get("content", {})
-            if content.get("type") == "text" and content.get("text"):
-                return content["text"].strip()
+            if content.get("type") == "text":
+                text = (content.get("text") or "").strip()
+                if len(text) >= 15:
+                    return text
     return None
+
+
+# ── Footnote / reference handling ─────────────────────────────────────────────
+
+# Matches bare numeric citations in body text: [1], [2], [10], ...
+_FN_REF_RE   = re.compile(r'\[(\d+)\]')
+# A text region is a footnote definition if its content starts with [N]
+_FN_DEF_START = re.compile(r'^\s*\[\d+\]')
+
+
+def _detect_footnotes(
+    all_regions: list[dict],
+) -> tuple[dict[int, str], set[str]]:
+    """
+    Scan every text region and collect those whose content starts with [N].
+    These are treated as reference/footnote definitions.
+
+    Returns:
+        fn_defs        — {number: definition_text}
+        fn_region_ids  — region_ids of definition regions (skipped in body chapters)
+    """
+    fn_defs:       dict[int, str] = {}
+    fn_region_ids: set[str]       = set()
+
+    for region in all_regions:
+        content = region.get("content", {})
+        if content.get("type") != "text" or not content.get("text"):
+            continue
+        text = content["text"].strip()
+        if not _FN_DEF_START.match(text):
+            continue
+        entries = _parse_fn_def_region(text)
+        if entries:
+            fn_region_ids.add(region["region_id"])
+            for n, fn_text in entries:
+                if n not in fn_defs:
+                    fn_defs[n] = fn_text
+
+    return fn_defs, fn_region_ids
+
+
+def _parse_fn_def_region(text: str) -> list[tuple[int, str]]:
+    """
+    Split a text block that starts with [N] into (number, text) pairs.
+    Handles regions that contain multiple consecutive definitions.
+    """
+    # Split at each [N] boundary, keeping the delimiter via lookahead
+    parts = re.split(r'(?=\[\d+\]\s)', text.strip())
+    result = []
+    for part in parts:
+        part = part.strip()
+        m = re.match(r'^\[(\d+)\]\s*(.+)', part, re.DOTALL)
+        if m:
+            result.append((int(m.group(1)), m.group(2).strip()))
+    return result
+
+
+def _inject_fn_refs(
+    text: str,
+    fn_numbers: set[int],
+    fn_first_ref: dict[int, str] | None,
+    chap_filename: str,
+) -> str:
+    """
+    Replace [N] citation markers with interactive epub:type="noteref" links.
+
+    Only linkifies Ns that have a known definition (fn_numbers).
+    The first occurrence of each [N] also gets an id="fnref-N" anchor so the
+    footnotes chapter can link back to it.
+    Handles HTML escaping for all non-[N] text segments.
+    """
+    if not fn_numbers:
+        return _esc(text)
+
+    parts: list[str] = []
+    last = 0
+
+    for m in _FN_REF_RE.finditer(text):
+        n = int(m.group(1))
+        # Escape everything before this match
+        parts.append(_esc(text[last:m.start()]))
+        last = m.end()
+
+        if n not in fn_numbers:
+            parts.append(_esc(m.group(0)))
+            continue
+
+        # Record first chapter where this ref appears (for back-links)
+        if fn_first_ref is not None and n not in fn_first_ref:
+            fn_first_ref[n] = chap_filename
+            anchor = f' id="fnref-{n}"'
+        else:
+            anchor = ""
+
+        parts.append(
+            f'<a{anchor} class="fn-ref"'
+            f' href="footnotes.xhtml#fn-{n}"'
+            f' epub:type="noteref">[{n}]</a>'
+        )
+
+    parts.append(_esc(text[last:]))
+    return "".join(parts)
+
+
+def _render_footnotes_html(
+    fn_defs: dict[int, str],
+    fn_first_ref: dict[int, str],
+) -> str:
+    """Build the HTML body for the dedicated References chapter."""
+    parts = ["<h2>References</h2>"]
+    for n in sorted(fn_defs.keys()):
+        ref_file = fn_first_ref.get(n, "")
+        if ref_file:
+            back = (
+                f'<a class="fn-back" href="{ref_file}#fnref-{n}"'
+                f' epub:type="backlink">&#8593;</a> '
+            )
+        else:
+            back = ""
+        entry_text = _esc(fn_defs[n])
+        parts.append(
+            f'<aside id="fn-{n}" class="fn-entry" epub:type="footnote">'
+            f'<p>{back}<strong>[{n}]</strong> {entry_text}</p>'
+            f'</aside>'
+        )
+    return "\n".join(parts)
 
 
 # ── CLI entry-point ────────────────────────────────────────────────────────────
