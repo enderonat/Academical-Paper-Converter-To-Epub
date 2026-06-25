@@ -1,0 +1,41 @@
+# Keep the build context small and the image clean.
+
+# Python env / cache
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Local data — mounted as volumes at runtime, never baked into the image
+books/
+data/
+output/
+
+# Model weights (downloaded at runtime, cached in a volume)
+*.safetensors
+*.pt
+*.pth
+*.bin
+models/
+.cache/
+
+# Git / editor / AI config
+.git/
+.gitignore
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Thesis artifacts
+thesis/
+*.docx
+*.pdf
+
+# Docs / notes not needed in the image
+current_state.md
+requirements.txt

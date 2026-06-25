@@ -1,0 +1,21 @@
+# Convenience wrapper so users don't have to remember a long `docker run -v ...`.
+#
+# Build:                docker compose build
+# Convert all PDFs:     docker compose run --rm pdf2epub
+# Convert one book:     docker compose run --rm pdf2epub mybook
+# Force reprocess:      docker compose run --rm pdf2epub mybook --force
+#
+# Drop input PDFs in ./books, find finished EPUBs in ./output.
+
+services:
+  pdf2epub:
+    build: .
+    image: pdf2epub:latest
+    volumes:
+      - ./books:/app/books      # input PDFs
+      - ./data:/app/data        # intermediate render/layout/extraction
+      - ./output:/app/output    # finished EPUBs
+      - hf_cache:/models        # surya model weights, persisted across runs
+
+volumes:
+  hf_cache:
