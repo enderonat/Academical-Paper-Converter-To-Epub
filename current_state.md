@@ -4,68 +4,76 @@ Live handoff doc. Read this at the start of any session continuing pipeline work
 
 ## What works end-to-end
 
-- **module_01 (render)** — PDF → 200dpi PNGs. Now stores `rotation` (0/90/180/270) per page.
+- **module_01 (render)** — PDF → 200dpi PNGs. Stores `rotation` (0/90/180/270) per page in manifest.
 - **module_02 (layout)** — surya 0.6.0 layout detection; `_column_aware_sort` reading order. Rotated pages (90°/270°) skip surya entirely and get a single full-page Figure region.
-- **module_03 (extract)** — word-level PyMuPDF extraction with center-point filtering; junk filter (frequency + pattern + position). Formula crops now extend to full column/page width to prevent cut-offs.
-- **module_04 (epub)** — `<figure class="visual">` with float:none CSS. `_find_document_title()` limited to page 1 only, min 15 chars.
+- **module_03 (extract)** — word-level PyMuPDF extraction with center-point filtering. Junk filter: frequency + pattern (including "check for updates", "crossmark") + top/bottom/left/right margin filter for short text and small images (< 200×200 px). Formula crops extend to full column/page width to prevent cut-offs.
+- **module_04 (epub)** — `<figure class="visual">` with float:none CSS. `_find_document_title()` page-1 only, min 15 chars, fallback = raw book_name. Duplicate image dedup: regions whose effective crop bbox is 65%+ inside a larger region's crop are dropped before rendering (fixes surya's formula fragmentation). Interactive footnotes: `[N]` in body text becomes `epub:type="noteref"` links; definitions detected at start of text regions, collected into `footnotes.xhtml` with `↑` back-links.
 - **pipeline.py** — accepts a path OR a bare book name. `--force` reprocesses.
 
-## This session's additions (2026-04-29, later)
+## This session's work (2026-04-29)
 
-1. **Sideways page handling** — module_01 stores `page.rotation` in manifest; module_02 detects 90°/270° rotated pages and replaces surya output with a single full-page Figure region (clean, no coordinate mess).
-2. **EPUB title fixed** — `_find_document_title` now only searches page 1 and requires ≥15 chars. Fallback uses raw `book_name`. Kills the "shows as chapter" bug.
-3. **Left/right margin filter added** — `JUNK_LEFT_FRAC = 0.05`, `JUNK_RIGHT_FRAC = 0.05` added. Short text AND small images (< 200×200px) in the outer 5% margins on any side are dropped. Catches CrossMark emblems, publisher logos, corner badges.
-4. **"Check for updates" / CrossMark patterns** — added `check\s+for\s+updates` and `crossmark` to JUNK_PATTERNS.
-5. **Formula crop extension** — Formula regions now extend to full column width (or full page width if formula > 45% page width). Prevents equations being cut off at column boundaries in math-heavy papers.
+### Quality fixes
+1. **Sideways page handling** — module_01 stores `page.rotation`; module_02 replaces surya output with a single full-page Figure for 90°/270° pages.
+2. **EPUB title** — `_find_document_title` scans page 1 only, requires ≥15 chars. Fallback = raw `book_name` (no `.title()` mangling). Fixes "shows as chapter" bug.
+3. **Outer margin filter** — left/right 5% added (`JUNK_LEFT_FRAC`, `JUNK_RIGHT_FRAC`). Short text and small images in any outer margin get dropped (CrossMark, publisher logos, corner badges).
+4. **Junk patterns** — added `check\s+for\s+updates` and `crossmark` to JUNK_PATTERNS.
+5. **Formula crop extension** — Formula regions extended to full column (or full page if > 45% width) to prevent cut-off equations. Fixes math-heavy papers like 2510.22216v1.
+6. **Duplicate formula fix** — `_dedup_overlapping_images` + `_effective_crop_bbox` in module_04 drops image regions whose effective crop (after extension) is 65%+ inside a larger region. Confirmed: page 5 of 1-s2.0-S2950555025000485-main goes from 11 → 4 image regions.
 
-6. **Interactive footnotes/references** — module_04 now detects text regions that start with `[N]` as reference definitions, collects them into a dedicated `footnotes.xhtml` chapter (shown as "References" in TOC), and replaces every `[N]` in body text with an `epub:type="noteref"` link. Each footnote entry has an `↑` back-link to the first occurrence in the body. CSS added for `.fn-ref` (superscript blue), `.fn-entry` (left-border aside), `.fn-back`. Works on Kobo; Kindle renders cross-file footnotes as regular navigation links (pop-ups require same-file footnotes, an acceptable trade-off for end-of-book reference lists).
+### New feature
+7. **Interactive footnotes/references** — `_detect_footnotes` scans all text regions for those starting with `[N]`; marks them as definition regions. Body text gets `[N]` → `<a epub:type="noteref">` links to `footnotes.xhtml#fn-N`. First occurrence per number gets `id="fnref-N"` for back-linking. References chapter appended to TOC with `<aside epub:type="footnote">` entries and `↑` back-links. Kobo shows as side panel; Kindle navigates (cross-file pop-ups not possible). CSS: `.fn-ref`, `.fn-entry`, `.fn-back`.
 
-## New test corpus
+## Test corpus (books/)
 
-- `2510.22216v1.pdf` — math-heavy arXiv preprint added to `books/`. Not yet run through pipeline; this session's fixes target its known issues.
+- `LeatandRiley2021Petrology31b.pdf` — primary, 14-page two-column geology paper. Pipeline fully verified.
+- `Smellie_et_al_2021_AntSci_KGI_Eocene_strat.pdf` — secondary. **Not re-run since geometry sort fix** — needs a verification pass.
+- `2510.22216v1.pdf` — math-heavy arXiv preprint. **Not yet run** — tests formula extension + margin filter.
+- `1-s2.0-S2950555025000485-main.pdf` — Elsevier paper used to diagnose duplicate formula bug. Layout cached, extraction needs re-run to pick up dedup fix.
+- `1-s2.0-S259014861930007X-main.pdf` — second Elsevier paper. Layout cached, not fully tested.
 
 ## Open issues — punch list
 
 **High value, probably quick:**
-1. **Module_02 loads surya before checking cache** — still present. If all layout pages are already cached (version matches), it still calls `_load_surya()` and would crash if surya's API drifted. Should short-circuit before loading the model.
-2. **Manual junk-image deletion mechanism** — for recurring crap the automatic filter misses. Proposed: `data/<book>/excluded_regions.json` + small CLI helper.
-3. **Run 2510.22216v1 through the full pipeline** — verify formula handling, sideways pages, margin filter. Check EPUB output quality.
-4. **Verify Smellie paper** — hasn't been run since the geometry sort fix.
+1. **Module_02 loads surya before checking cache** — if all pages are cached (version matches), still calls `_load_surya()` unnecessarily. Should short-circuit: check all pages cached first, skip model load if so.
+2. **Manual junk exclusion** — for recurring junk the auto filter misses. Proposed: `data/<book>/excluded_regions.json` + small CLI helper that lists regions by page and lets you mark some as excluded.
+3. **Run verification passes** — re-run Smellie and 1-s2.0-S2950555025000485-main through module_04 to verify all fixes look correct in EPUB.
 
 **Bigger features:**
-5. **Footnotes** — clickable markers in body, footnote text pulled to chapter end with back-links.
-6. **Cross-references** — "see Fig. 3" → anchor links to the figure.
+4. **Cross-references** — "see Fig. 3" / "Table 2" → anchor links to the figure/table.
+5. **Footnote detection robustness** — current detector requires region to START with `[N]`. Papers that pack multiple references into a block like "1. Smith... 2. Jones..." (period-separated, not bracket) would be missed.
 
-## Known unknowns
+## Known caveats
 
-- `2510.22216v1.pdf`: exact page with sideways content unknown. If rotation stored in manifest but layout was already cached from a prior run, use `--force` to re-detect.
-- For papers already in the cache: rotation fix only applies to newly-detected pages. Use `--force` or clear the layout cache to trigger re-detection on previously processed papers.
-- Page numbers rendered as formula images: if they're small AND in the bottom margin, the new margin-image filter should drop them. If they fall just inside the margin threshold, they'd still appear as images — acceptable for now.
+- **Rotation fix + cached layout**: rotation handling in module_02 only applies on fresh layout detection. Papers already in cache with a rotated page: clear that page's layout JSON or use `--force`.
+- **Footnote detection**: only catches `[N]`-format citations (bracket-number). Author-year citations (Smith, 2020) are not linked.
+- **Formula dedup threshold (65%)**: might be slightly aggressive for FigureGroups that contain genuinely different sub-images at similar positions. Tune if needed.
 
 ## Sanity-check commands
 
 ```bash
-# Run full pipeline on math paper (first time)
-PYTHONIOENCODING=utf-8 python pipeline.py books/2510.22216v1.pdf
+# Re-run just EPUB assembly (no surya, no extraction — just re-builds the .epub)
+PYTHONIOENCODING=utf-8 python module_04_epub.py LeatandRiley2021Petrology31b
+PYTHONIOENCODING=utf-8 python module_04_epub.py 1-s2.0-S2950555025000485-main
 
-# Run modules 03+04 only (layout already cached, surya not needed)
+# Re-run extraction + epub (layout cached, surya not needed)
 PYTHONIOENCODING=utf-8 python module_03_extractor.py LeatandRiley2021Petrology31b
 PYTHONIOENCODING=utf-8 python module_04_epub.py LeatandRiley2021Petrology31b
 
-# Full pipeline (use direct PDF path to avoid → unicode crash on Windows)
-PYTHONIOENCODING=utf-8 python pipeline.py books/LeatandRiley2021Petrology31b.pdf
+# Full pipeline on new papers (first time, surya runs)
+PYTHONIOENCODING=utf-8 python pipeline.py books/2510.22216v1.pdf
+PYTHONIOENCODING=utf-8 python pipeline.py books/1-s2.0-S2950555025000485-main.pdf
 
-# Force re-detect layout (e.g. after a sideways-page fix)
+# Force re-detect layout (e.g. to apply rotation fix to a cached paper)
 PYTHONIOENCODING=utf-8 python pipeline.py books/LeatandRiley2021Petrology31b.pdf --force
 
-# Nuclear cache clear (extraction only — layout is fine)
-del data\LeatandRiley2021Petrology31b\extraction\*.json
-del data\LeatandRiley2021Petrology31b\extraction_manifest.json
+# Nuclear clear — extraction only (layout is fine, keep it)
+del data\1-s2.0-S2950555025000485-main\extraction\*.json
+del data\1-s2.0-S2950555025000485-main\extraction_manifest.json
 
-# Nuclear clear everything
+# Nuclear clear — everything for a book
 rmdir /s /q data\LeatandRiley2021Petrology31b\layout
+rmdir /s /q data\LeatandRiley2021Petrology31b\extraction
 del data\LeatandRiley2021Petrology31b\layout_manifest.json
 del data\LeatandRiley2021Petrology31b\extraction_manifest.json
-rmdir /s /q data\LeatandRiley2021Petrology31b\extraction
 del output\LeatandRiley2021Petrology31b.epub
 ```

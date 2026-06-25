@@ -1,16 +1,39 @@
 # Python environment and cache
 .venv/
+venv/
+env/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
 
-# Local Data and Outputs
-# (We ignore these so we don't push massive PDFs, images, or EPUBs to GitHub)
+# Local data and outputs
+# Massive PDFs, page images, and EPUBs. At runtime these are mounted into the
+# Docker container as volumes, never baked into the image or committed.
 books/
 data/
 output/
 
-# AI and Editor configuration folders
-.claude/
+# ML model weights
+# surya / torch download these at runtime (multi-GB). Never commit; the
+# Dockerfile fetches them at build or first run.
+*.safetensors
+*.pt
+*.pth
+*.bin
+models/
+.cache/
 
-# Note: We are NOT ignoring CLAUDE.md or current_state.md. 
-# It's good to track these so your project context is backed up!
+# Editor / AI config
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Thesis artifacts (kept out of the code repo entirely)
+thesis/
+*.docx
+
+# Docker note: Dockerfile, docker-compose.yml and .dockerignore SHOULD be
+# tracked once we add them, so they are intentionally not ignored here.
