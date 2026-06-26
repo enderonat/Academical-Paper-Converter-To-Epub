@@ -341,7 +341,10 @@ def _extract_image(
 
     return {
         "type":           "image",
-        "image_path":     str(out_path),
+        # Store a path relative to DATA_DIR with forward slashes, so the cache
+        # stays portable across machines / OSes / Docker. module_04 locates the
+        # crop via regions_dir + filename and treats this only as a hint.
+        "image_path":     out_path.relative_to(DATA_DIR).as_posix(),
         "image_filename": filename,
     }
 
