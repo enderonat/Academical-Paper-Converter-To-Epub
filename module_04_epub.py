@@ -24,7 +24,7 @@ from pathlib import Path
 
 from ebooklib import epub
 
-from config import EPUB_CSS, LABEL_TO_HTML, OUTPUT_DIR
+from config import DATA_DIR, EPUB_CSS, LABEL_TO_HTML, OUTPUT_DIR, REGIONS_SUBDIR
 from module_03_extractor import load_extraction_manifest
 
 
@@ -81,8 +81,12 @@ def build_epub(book_name: str) -> Path:
     if fn_defs:
         print(f"  Refs found: {len(fn_defs)}")
 
-    # Add image files to epub, build a lookup: filename → epub item
-    image_items = _add_images(book, all_regions)
+    # Add image files to epub, build a lookup: filename → epub item.
+    # Resolve crops from the current environment's regions dir rather than any
+    # absolute path baked into the cache, so the same data/ cache stays
+    # buildable across machines / OSes / Docker.
+    regions_dir = DATA_DIR / book_name / REGIONS_SUBDIR
+    image_items = _add_images(book, all_regions, regions_dir)
 
     # Build epub chapter objects
     epub_chapters: list[epub.EpubHtml] = []
@@ -274,10 +278,17 @@ def _chapter_has_content(chapter: dict) -> bool:
 
 # ── Image registration ─────────────────────────────────────────────────────────
 
-def _add_images(book: epub.EpubBook, regions: list[dict]) -> dict[str, epub.EpubItem]:
+def _add_images(
+    book: epub.EpubBook, regions: list[dict], regions_dir: Path
+) -> dict[str, epub.EpubItem]:
     """
     Read every image crop and register it with the epub book.
     Returns a dict mapping filename → EpubItem for use in HTML rendering.
+
+    Crops are located via `regions_dir / image_filename`. The cached
+    "image_path" is intentionally NOT trusted as the primary source: it may be
+    an absolute path from another machine (e.g. a Windows path when the cache
+    is reused under Docker/Linux). It's only used as a last-resort fallback.
     """
     items: dict[str, epub.EpubItem] = {}
 
@@ -290,7 +301,9 @@ def _add_images(book: epub.EpubBook, regions: list[dict]) -> dict[str, epub.Epub
         if filename in items:
             continue   # already added (shouldn't happen but be safe)
 
-        img_path = Path(content["image_path"])
+        img_path = regions_dir / filename
+        if not img_path.exists():
+            img_path = Path(content.get("image_path", ""))
         if not img_path.exists():
             continue
 
