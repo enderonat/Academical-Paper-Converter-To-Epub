@@ -102,6 +102,12 @@ Note that one dependency (`surya-ocr`) is intentionally pinned to `0.6.0`; newer
 
 Python · [surya-ocr](https://github.com/datalab-to/surya) (layout detection) · PyMuPDF (rendering & text extraction) · ebooklib (EPUB assembly) · PyTorch (CPU) · Docker.
 
+## Support
+
+If this saved you some eye strain, you can buy me a coffee:
+
+<a href="https://www.buymeacoffee.com/EnderOnat" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-red.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Free to use, modify, and build on.
