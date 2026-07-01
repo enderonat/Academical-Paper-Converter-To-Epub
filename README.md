@@ -106,7 +106,7 @@ Python · [surya-ocr](https://github.com/datalab-to/surya) (layout detection) ·
 
 If this saved you some eye strain, you can buy me a coffee:
 
-<a href="https://www.buymeacoffee.com/EnderOnat" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-red.png" alt="Buy Me a Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+<a href="https://ko-fi.com/enderonat" target="_blank"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support me on Ko-fi" ></a>
 
 ## License
 
