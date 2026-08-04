@@ -111,3 +111,9 @@ If this saved you some eye strain, you can buy me a coffee:
 ## License
 
 MIT — see [LICENSE](LICENSE). Free to use, modify, and build on.
+
+## Author & Feedback
+
+Created by **Ender Onat Güraslan**. 
+
+If this tool helped you read academic papers on your e-reader, feel free to drop a ⭐️ on the repository or connect with me on [LinkedIn](https://www.linkedin.com/in/enderonat/)!
