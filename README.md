@@ -1,3 +1,9 @@
+# Academic PDF to EPUB Converter
+
+An open-source, Dockerized tool designed to convert multi-column academic papers, research PDFs, and scientific documents into clean EPUB format for Kindle and E-ink readers.
+
+![Academic paper converted to EPUB running on a Kindle e-reader](https://github.com/user-attachments/assets/c4163c0e-40c4-442b-ab48-171adefadf62)
+
 # PDF → EPUB Pipeline
 
 Convert academic research papers — multi-column, math- and figure-heavy — into clean EPUBs that read well on Kindle, Kobo, and other e-ink devices.
