@@ -133,6 +133,9 @@ def main() -> None:
     for name, status in results.items():
         print(f"  {status}  {name}")
 
+    if any(status != "✓" for status in results.values()):
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
